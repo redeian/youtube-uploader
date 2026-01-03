@@ -118,6 +118,11 @@ def initialize_session_state():
 
 def render_sidebar():
     """Render the sidebar with API credentials and authentication."""
+    # Display logo if available
+    logo_path = Path(config.STREAMLIT_LOGO)
+    if logo_path.exists():
+        st.sidebar.image(str(logo_path), width=200)
+    
     st.sidebar.title("⚙️ Settings")
     
     # API Credentials Section
@@ -238,7 +243,7 @@ def render_sidebar():
 
 def render_main_interface():
     """Render the main interface for video upload."""
-    st.markdown('<h1 class="main-header">📹 YouTube Video Uploader</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">📹 AI YouTube Uploader by Mark Digital</h1>', unsafe_allow_html=True)
     
     # Show success/error messages
     if st.session_state.success_message:
@@ -438,6 +443,52 @@ def render_main_interface():
         
         st.markdown("---")
         
+        # Upload Performance Settings
+        st.header("🚀 Upload Performance Settings")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            # Chunk Size
+            chunk_size_mb = st.selectbox(
+                "Upload Chunk Size",
+                options=[5, 10, 20, 50, 100],
+                index=2,  # Default to 20MB
+                help="Larger chunks can improve upload speed but may use more memory",
+                key="chunk_size_mb"
+            )
+            
+            # Bandwidth Limit
+            bandwidth_limit_mbps = st.selectbox(
+                "Bandwidth Limit",
+                options=[0, 1, 2, 5, 10, 20, 50, 100],
+                index=0,  # Default to unlimited
+                help="Limit upload speed (0 = unlimited)",
+                key="bandwidth_limit_mbps"
+            )
+        
+        with col2:
+            # Max Retries
+            max_retries = st.selectbox(
+                "Max Retry Attempts",
+                options=[3, 5, 7, 10],
+                index=1,  # Default to 5
+                help="Number of times to retry on network errors",
+                key="max_retries"
+            )
+            
+            # Connection Timeout
+            timeout_seconds = st.selectbox(
+                "Connection Timeout",
+                options=[10, 20, 30, 60, 120],
+                index=2,  # Default to 30 seconds
+                help="Timeout for upload connections",
+                key="timeout_seconds"
+            )
+        
+        st.info("💡 Tip: Increase chunk size for faster uploads with stable connections. Use bandwidth limiting if you need to preserve network capacity for other tasks.")
+        
+        st.markdown("---")
+        
         # Additional Settings
         st.header("⚙️ Additional Settings")
         
@@ -606,7 +657,25 @@ def handle_upload():
         status_text.text(f"Uploading... {progress * 100:.1f}% ({bytes_uploaded / (1024**2):.1f} MB / {total_bytes / (1024**2):.1f} MB)")
     
     try:
-        # Perform upload
+        # Get upload settings from UI
+        upload_settings = {
+            'chunk_size': st.session_state.get('chunk_size_mb', 20) * 1024 * 1024,  # Convert MB to bytes
+            'bandwidth_limit': st.session_state.get('bandwidth_limit_mbps', 0) * 1024 * 1024,  # Convert Mbps to bytes/sec
+            'max_retries': st.session_state.get('max_retries', 5),
+            'timeout': st.session_state.get('timeout_seconds', 30)
+        }
+        
+        # Update config with user settings
+        config.UPLOAD_CHUNK_SIZE = upload_settings['chunk_size']
+        config.UPLOAD_BANDWIDTH_LIMIT = upload_settings['bandwidth_limit']
+        config.MAX_RETRY_ATTEMPTS = upload_settings['max_retries']
+        config.UPLOAD_CONNECTION_TIMEOUT = upload_settings['timeout']
+        
+        # Reinitialize YouTube client with new settings
+        credentials = st.session_state.oauth_manager.get_credentials()
+        st.session_state.youtube_client = YouTubeClient(credentials)
+        
+        # Perform upload with optimized settings
         result = st.session_state.youtube_client.upload_video(
             st.session_state.uploaded_file,
             metadata,

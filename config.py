@@ -44,17 +44,32 @@ YOUTUBE_CLIENT_SECRET = os.getenv('YOUTUBE_CLIENT_SECRET', '')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 
 # Upload configuration
-UPLOAD_CHUNK_SIZE = 5 * 1024 * 1024  # 5 MB chunks
+UPLOAD_CHUNK_SIZE = 20 * 1024 * 1024  # 20 MB chunks (increased from 5MB for better performance)
 MAX_FILE_SIZE = 256 * 1024 * 1024 * 1024  # 256 GB (YouTube limit)
 SUPPORTED_VIDEO_FORMATS = [
     ".mp4", ".mov", ".avi", ".flv", ".wmv", ".webm", ".mkv", ".mpeg", ".mpg"
 ]
 
+# Connection optimization
+UPLOAD_CONNECTION_TIMEOUT = 30  # seconds
+UPLOAD_READ_TIMEOUT = 60  # seconds
+UPLOAD_MAX_RETRIES = 5  # Increased from 3 for better reliability
+UPLOAD_RETRY_BACKOFF = 1.5  # Reduced from 2.0 for faster retries
+UPLOAD_RESUMABLE_THRESHOLD = 10 * 1024 * 1024  # 10MB - files larger than this will use resumable uploads
+
+# Bandwidth throttling (bytes per second)
+# Set to 0 to disable throttling (maximum speed)
+UPLOAD_BANDWIDTH_LIMIT = 0  # Default: no limit (0 = unlimited)
+# Example limits:
+# 1 Mbps: 1 * 1024 * 1024
+# 5 Mbps: 5 * 1024 * 1024
+# 10 Mbps: 10 * 1024 * 1024
+
 # Retry configuration
-MAX_RETRY_ATTEMPTS = 3
+MAX_RETRY_ATTEMPTS = 5  # Increased for better reliability
 RETRY_INITIAL_DELAY = 1.0  # seconds
 RETRY_MAX_DELAY = 60.0  # seconds
-RETRY_BACKOFF_MULTIPLIER = 2.0
+RETRY_BACKOFF_MULTIPLIER = 1.5  # Reduced for faster retries
 
 # Progress reporting
 PROGRESS_UPDATE_INTERVAL = 0.1  # seconds
@@ -65,9 +80,10 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_LEVEL = "INFO"
 
 # Streamlit configuration
-STREAMLIT_TITLE = "YouTube Video Uploader"
+STREAMLIT_TITLE = "AI YouTube Uploader by Mark Digital"
 STREAMLIT_PAGE_ICON = "📹"
 STREAMLIT_LAYOUT = "wide"
+STREAMLIT_LOGO = "assets/logo.png"
 
 # UI Messages
 MSG_AUTH_SUCCESS = "✅ Successfully authenticated with YouTube!"

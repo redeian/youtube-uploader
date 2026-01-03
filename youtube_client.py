@@ -11,8 +11,12 @@ from typing import Callable, Dict, Optional
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 from google.oauth2.credentials import Credentials
+import httplib2
+import io
+import threading
+import time
 
 import config
 
@@ -53,6 +57,55 @@ class UploadError(YouTubeClientError):
     pass
 
 
+class ThrottledMediaFileUpload(MediaFileUpload):
+    """
+    A MediaFileUpload subclass that implements bandwidth throttling.
+    """
+    
+    def __init__(self, filename, chunksize=None, resumable=False, bandwidth_limit=0):
+        """
+        Initialize throttled media upload.
+        
+        Args:
+            filename: Path to file to upload
+            chunksize: Size of each chunk in bytes
+            resumable: Whether to use resumable upload
+            bandwidth_limit: Maximum bytes per second (0 = unlimited)
+        """
+        super().__init__(filename, chunksize=chunksize, resumable=resumable)
+        self.bandwidth_limit = bandwidth_limit
+        self.last_chunk_time = 0
+        self.lock = threading.Lock()
+    
+    def next_chunk(self, http=None):
+        """
+        Get the next chunk of data with bandwidth throttling.
+        
+        Args:
+            http: HTTP client
+            
+        Returns:
+            Tuple of (status, response)
+        """
+        # Apply bandwidth throttling if limit is set
+        if self.bandwidth_limit > 0:
+            with self.lock:
+                current_time = time.time()
+                elapsed = current_time - self.last_chunk_time
+                
+                # Calculate expected time for this chunk
+                chunk_time = self.chunksize / self.bandwidth_limit
+                
+                # If we're uploading too fast, wait
+                if elapsed < chunk_time:
+                    time.sleep(chunk_time - elapsed)
+                
+                self.last_chunk_time = time.time()
+        
+        # Call parent method
+        return super().next_chunk(http)
+
+
 class YouTubeClient:
     """
     Client for interacting with YouTube Data API v3.
@@ -71,8 +124,10 @@ class YouTubeClient:
         self._initialize_service()
     
     def _initialize_service(self) -> None:
-        """Initialize YouTube API service."""
+        """Initialize YouTube API service with optimized settings."""
         try:
+            # Build the YouTube service with credentials
+            # The Google API client will handle HTTP optimization internally
             self.youtube = build(
                 config.YOUTUBE_API_SERVICE_NAME,
                 config.YOUTUBE_API_VERSION,
@@ -202,11 +257,16 @@ class YouTubeClient:
             logger.info(f"Thumbnail provided: {thumbnail_path}")
         
         try:
-            # Create media upload object
-            media = MediaFileUpload(
+            # Determine if we should use resumable upload based on file size
+            file_size = file_info['file_size']
+            use_resumable = file_size > config.UPLOAD_RESUMABLE_THRESHOLD
+            
+            # Create throttled media upload object with optimized chunk size
+            media = ThrottledMediaFileUpload(
                 file_path,
                 chunksize=config.UPLOAD_CHUNK_SIZE,
-                resumable=True
+                resumable=use_resumable,
+                bandwidth_limit=config.UPLOAD_BANDWIDTH_LIMIT
             )
             
             # Initialize upload request
@@ -215,6 +275,8 @@ class YouTubeClient:
                 body=body,
                 media_body=media
             )
+            
+            logger.info(f"Starting upload with {config.UPLOAD_CHUNK_SIZE / (1024**2):.0f}MB chunks, resumable: {use_resumable}")
             
             # Execute upload with retry logic
             response = self._execute_upload_with_retry(
@@ -270,7 +332,7 @@ class YouTubeClient:
         total_bytes: int
     ) -> Dict[str, any]:
         """
-        Execute upload with retry logic and progress tracking.
+        Execute upload with optimized retry logic and progress tracking.
         
         Args:
             request: YouTube API upload request
@@ -287,6 +349,7 @@ class YouTubeClient:
         """
         retry_count = 0
         last_exception = None
+        consecutive_successes = 0
         
         while retry_count < config.MAX_RETRY_ATTEMPTS:
             try:
@@ -300,28 +363,37 @@ class YouTubeClient:
                         if progress_callback:
                             progress_callback(bytes_uploaded, total_bytes)
                         
+                        # Calculate upload speed
+                        progress_percent = bytes_uploaded / total_bytes * 100
                         logger.debug(
-                            f"Upload progress: {bytes_uploaded / total_bytes * 100:.1f}%"
+                            f"Upload progress: {progress_percent:.1f}% ({bytes_uploaded / (1024**2):.1f}MB / {total_bytes / (1024**2):.1f}MB)"
                         )
+                        
+                        # Reset retry count on successful chunk
+                        consecutive_successes += 1
+                        if consecutive_successes >= 5:  # After 5 successful chunks, reset retry count
+                            retry_count = 0
+                            consecutive_successes = 0
                 
                 return response
             
             except Exception as e:
                 last_exception = e
                 retry_count += 1
+                consecutive_successes = 0  # Reset on error
                 
                 if retry_count >= config.MAX_RETRY_ATTEMPTS:
                     logger.error(f"Upload failed after {retry_count} attempts")
                     raise NetworkError(f"Upload failed after {retry_count} attempts: {str(e)}")
                 
-                # Calculate delay with exponential backoff
+                # Calculate delay with exponential backoff (using optimized multiplier)
                 delay = min(
                     config.RETRY_INITIAL_DELAY * (config.RETRY_BACKOFF_MULTIPLIER ** (retry_count - 1)),
                     config.RETRY_MAX_DELAY
                 )
                 
                 logger.warning(
-                    f"Upload attempt {retry_count} failed. Retrying in {delay:.1f}s..."
+                    f"Upload attempt {retry_count} failed. Retrying in {delay:.1f}s... Error: {str(e)}"
                 )
                 time.sleep(delay)
         
