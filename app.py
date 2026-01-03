@@ -20,6 +20,7 @@ from youtube_client import (
     NetworkError,
     UploadError
 )
+from ai_metadata_generator import AIMetadataGenerator
 
 # Check if credentials are configured in environment
 CREDENTIALS_CONFIGURED = bool(config.YOUTUBE_CLIENT_ID and config.YOUTUBE_CLIENT_SECRET)
@@ -109,6 +110,10 @@ def initialize_session_state():
         st.session_state.error_message = None
     if 'success_message' not in st.session_state:
         st.session_state.success_message = None
+    if 'upload_clicked' not in st.session_state:
+        st.session_state.upload_clicked = False
+    if 'thumbnail_file' not in st.session_state:
+        st.session_state.thumbnail_file = None
 
 
 def render_sidebar():
@@ -153,6 +158,15 @@ def render_sidebar():
         if st.session_state.oauth_manager.is_authenticated():
             st.session_state.authenticated = True
             st.sidebar.success("✅ Authenticated")
+            
+            # Reinitialize YouTube client if needed
+            if st.session_state.youtube_client is None:
+                credentials = st.session_state.oauth_manager.get_credentials()
+                if credentials:
+                    st.session_state.youtube_client = YouTubeClient(credentials)
+                    # Get channel info if not available
+                    if st.session_state.channel_info is None:
+                        st.session_state.channel_info = st.session_state.youtube_client.get_channel_info()
             
             # Show channel info if available
             if st.session_state.channel_info:
@@ -275,8 +289,103 @@ def render_main_interface():
         
         st.markdown("---")
         
+        # Thumbnail Upload Section
+        st.header("🖼️ Thumbnail")
+        
+        thumbnail_file = st.file_uploader(
+            "Upload Custom Thumbnail",
+            type=['jpg', 'jpeg', 'png', 'webp'],
+            help="Upload a custom thumbnail for your video (JPG, PNG, or WEBP format)",
+            key="thumbnail_uploader"
+        )
+        
+        if thumbnail_file:
+            # Save thumbnail temporarily
+            temp_thumbnail_path = Path(f"temp_thumbnail_{thumbnail_file.name}")
+            with open(temp_thumbnail_path, "wb") as f:
+                f.write(thumbnail_file.getbuffer())
+            
+            st.session_state.thumbnail_file = str(temp_thumbnail_path)
+            
+            # Display thumbnail preview
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.image(temp_thumbnail_path, caption="Thumbnail Preview", width=200)
+            with col2:
+                st.metric("File Name", thumbnail_file.name)
+                st.metric("File Size", f"{len(thumbnail_file.getbuffer()) / (1024**2):.2f} MB")
+        
+        st.markdown("---")
+        
+        # AI Metadata Generation Section
+        st.header("🤖 AI-Powered Metadata Generation")
+        
+        # Video context for AI
+        video_context = st.text_area(
+            "Video Content Context",
+            placeholder="Describe your video content, topic, or main points (e.g., 'A tutorial about Python programming for beginners covering variables, loops, and functions')",
+            help="Provide a brief description of your video content to generate optimized title and description",
+            key="video_context",
+            height=100
+        )
+        
+        # Generate AI Metadata button
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.info("💡 Tip: The more detailed your video context, the better the AI-generated metadata will be.")
+        with col2:
+            generate_ai_button = st.button(
+                "✨ Generate with AI",
+                type="primary",
+                use_container_width=True,
+                key="generate_ai_btn"
+            )
+        
+        # Handle AI generation
+        if generate_ai_button and video_context:
+            if not config.GEMINI_API_KEY:
+                st.error("❌ Google Generative AI API key not configured. Please add GEMINI_API_KEY to your .env file.")
+            else:
+                try:
+                    with st.spinner("🤖 Generating optimized metadata with AI..."):
+                        # Get current values
+                        current_category = st.session_state.get('video_category', 'Education')
+                        current_tags = st.session_state.get('video_tags', 'AI')
+                        current_language = st.session_state.get('video_language', 'Thai')
+                        
+                        # Initialize AI generator
+                        ai_generator = AIMetadataGenerator()
+                        
+                        # Generate metadata
+                        ai_result = ai_generator.generate_metadata(
+                            video_context=video_context,
+                            video_language=current_language,
+                            category=current_category,
+                            tags=current_tags
+                        )
+                        
+                        # Update session state with AI-generated values
+                        st.session_state.video_title = ai_result['title']
+                        st.session_state.video_description = ai_result['description']
+                        
+                        # Merge AI-generated tags with existing tags
+                        if ai_result['tags']:
+                            existing_tags = [tag.strip() for tag in current_tags.split(',') if tag.strip()]
+                            ai_tags = [tag.strip() for tag in ai_result['tags'].split(',') if tag.strip()]
+                            merged_tags = list(set(existing_tags + ai_tags))
+                            st.session_state.video_tags = ', '.join(merged_tags)
+                        
+                        st.success("✅ AI-generated metadata applied successfully!")
+                        st.rerun()
+                
+                except Exception as e:
+                    st.error(f"❌ Failed to generate AI metadata: {str(e)}")
+                    logger.error(f"AI metadata generation error: {str(e)}", exc_info=True)
+        
+        st.markdown("---")
+        
         # Metadata Section
-        st.header("📝 Video Metadata")
+        st.header("� Video Metadata")
         
         # Title
         title = st.text_input(
@@ -298,6 +407,7 @@ def render_main_interface():
         # Tags
         tags_input = st.text_input(
             "Tags",
+            value="AI",
             placeholder="Enter tags separated by commas (e.g., tutorial, python, programming)",
             help="Add relevant tags to help viewers find your video",
             key="video_tags"
@@ -308,7 +418,7 @@ def render_main_interface():
         category = st.selectbox(
             "Category",
             options=list(config.VIDEO_CATEGORIES.values()),
-            index=21,  # Default to "Education"
+            index=14,  # Default to "Education"
             help="Select the category that best describes your video",
             key="video_category"
         )
@@ -326,16 +436,63 @@ def render_main_interface():
             key="privacy_status"
         )
         
+        st.markdown("---")
+        
+        # Additional Settings
+        st.header("⚙️ Additional Settings")
+        
+        # Recording Date
+        from datetime import datetime
+        recording_date = st.date_input(
+            "Recording Date",
+            value=datetime.now().date(),
+            help="The date when the video was recorded",
+            key="recording_date"
+        )
+        
+        # Video Language
+        video_language = st.selectbox(
+            "Video Language",
+            options=["English", "Thai", "Spanish", "French", "German", "Japanese", "Korean", "Chinese", "Other"],
+            index=1,  # Default to "Thai"
+            help="The primary language of the video",
+            key="video_language"
+        )
+        
+        # Altered Content
+        altered_content = st.selectbox(
+            "Altered Content - Do any of the following describe your content?",
+            options=["No", "Yes - Contains altered content", "Yes - Contains synthetic content", "Yes - Contains generative AI content"],
+            index=0,  # Default to "No"
+            help="Select if your content contains altered, synthetic, or generative AI content",
+            key="altered_content"
+        )
+        
+        # Paid Promotion
+        paid_promotion = st.checkbox(
+            "Paid Promotion",
+            value=False,
+            help="Check if this video contains paid promotion or sponsored content",
+            key="paid_promotion"
+        )
+        
         # Metadata summary
         with st.expander("📋 Metadata Summary"):
-            st.json({
+            summary_data = {
                 "title": title,
                 "description": description[:100] + "..." if len(description) > 100 else description,
                 "tags": tags,
                 "category": category,
                 "category_id": category_id,
-                "privacy_status": privacy_status
-            })
+                "privacy_status": privacy_status,
+                "recording_date": str(recording_date),
+                "video_language": video_language,
+                "altered_content": altered_content,
+                "paid_promotion": paid_promotion
+            }
+            if st.session_state.thumbnail_file:
+                summary_data["thumbnail"] = "Custom thumbnail uploaded"
+            st.json(summary_data)
         
         st.markdown("---")
         
@@ -357,6 +514,7 @@ def render_main_interface():
                 # Start upload
                 st.session_state.upload_complete = False
                 st.session_state.upload_progress = 0
+                st.session_state.upload_clicked = True
                 st.rerun()
     else:
         st.info("📁 Please select a video file to upload")
@@ -394,11 +552,18 @@ def render_upload_success():
         st.session_state.uploaded_file = None
         st.session_state.upload_progress = 0
         
-        # Clean up temp file
+        # Clean up temp files
         if st.session_state.uploaded_file:
             temp_file = Path(st.session_state.uploaded_file)
             if temp_file.exists():
                 temp_file.unlink()
+        
+        # Clean up thumbnail file
+        if st.session_state.thumbnail_file:
+            temp_thumbnail = Path(st.session_state.thumbnail_file)
+            if temp_thumbnail.exists():
+                temp_thumbnail.unlink()
+            st.session_state.thumbnail_file = None
         
         st.rerun()
 
@@ -408,13 +573,25 @@ def handle_upload():
     if not st.session_state.uploaded_file:
         return
     
+    # Check if YouTube client is initialized
+    if not st.session_state.youtube_client:
+        st.session_state.error_message = "YouTube client not initialized. Please authenticate again."
+        st.session_state.upload_clicked = False
+        st.rerun()
+        return
+    
     # Get metadata from session state
     metadata = {
         'title': st.session_state.get('video_title', 'Untitled'),
         'description': st.session_state.get('video_description', ''),
         'tags': [tag.strip() for tag in st.session_state.get('video_tags', '').split(',') if tag.strip()],
         'category': st.session_state.get('video_category_id', '22'),
-        'privacy_status': st.session_state.get('privacy_status', 'private')
+        'privacy_status': st.session_state.get('privacy_status', 'private'),
+        'recording_date': st.session_state.get('recording_date'),
+        'video_language': st.session_state.get('video_language'),
+        'altered_content': st.session_state.get('altered_content'),
+        'paid_promotion': st.session_state.get('paid_promotion', False),
+        'thumbnail': st.session_state.get('thumbnail_file')
     }
     
     # Create progress bar
@@ -444,32 +621,45 @@ def handle_upload():
         st.session_state.upload_result = result
         st.session_state.upload_complete = True
         st.session_state.success_message = config.MSG_UPLOAD_SUCCESS
+        st.session_state.upload_clicked = False  # Reset the flag
         
-        # Clean up temp file
+        # Clean up temp files
         temp_file = Path(st.session_state.uploaded_file)
         if temp_file.exists():
             temp_file.unlink()
+        
+        # Clean up thumbnail file
+        if st.session_state.thumbnail_file:
+            temp_thumbnail = Path(st.session_state.thumbnail_file)
+            if temp_thumbnail.exists():
+                temp_thumbnail.unlink()
+            st.session_state.thumbnail_file = None
         
         st.rerun()
     
     except FileValidationError as e:
         st.session_state.error_message = f"{config.MSG_FILE_INVALID}\n\n{str(e)}"
+        st.session_state.upload_clicked = False  # Reset the flag
         st.rerun()
     
     except QuotaExceededError as e:
         st.session_state.error_message = f"{config.MSG_QUOTA_EXCEEDED}\n\n{str(e)}"
+        st.session_state.upload_clicked = False  # Reset the flag
         st.rerun()
     
     except NetworkError as e:
         st.session_state.error_message = f"{config.MSG_NETWORK_ERROR}\n\n{str(e)}"
+        st.session_state.upload_clicked = False  # Reset the flag
         st.rerun()
     
     except UploadError as e:
         st.session_state.error_message = f"{config.MSG_UPLOAD_FAILED}\n\n{str(e)}"
+        st.session_state.upload_clicked = False  # Reset the flag
         st.rerun()
     
     except Exception as e:
         st.session_state.error_message = f"Unexpected error: {str(e)}"
+        st.session_state.upload_clicked = False  # Reset the flag
         logger.error(f"Unexpected error during upload: {str(e)}", exc_info=True)
         st.rerun()
 
@@ -487,7 +677,8 @@ def main():
     
     # Handle upload if triggered
     if st.session_state.uploaded_file and not st.session_state.upload_complete:
-        if st.session_state.get('upload_btn', False):
+        if st.session_state.upload_clicked:
+            st.session_state.upload_clicked = False  # Reset the flag
             handle_upload()
 
 

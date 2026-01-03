@@ -40,6 +40,9 @@ OAUTH_ENCRYPTION_KEY_FILE = TOKENS_DIR / ".encryption_key"
 YOUTUBE_CLIENT_ID = os.getenv('YOUTUBE_CLIENT_ID', '')
 YOUTUBE_CLIENT_SECRET = os.getenv('YOUTUBE_CLIENT_SECRET', '')
 
+# Google Generative AI API key (from environment variables)
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+
 # Upload configuration
 UPLOAD_CHUNK_SIZE = 5 * 1024 * 1024  # 5 MB chunks
 MAX_FILE_SIZE = 256 * 1024 * 1024 * 1024  # 256 GB (YouTube limit)

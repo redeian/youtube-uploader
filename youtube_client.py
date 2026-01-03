@@ -146,7 +146,7 @@ class YouTubeClient:
         
         Args:
             file_path: Path to video file
-            metadata: Video metadata (title, description, tags, category, privacy_status)
+            metadata: Video metadata (title, description, tags, category, privacy_status, thumbnail)
             progress_callback: Optional callback function for progress updates
                               Callback receives (bytes_uploaded, total_bytes)
         
@@ -168,7 +168,8 @@ class YouTubeClient:
                 'title': metadata.get('title', 'Untitled'),
                 'description': metadata.get('description', ''),
                 'tags': metadata.get('tags', []),
-                'categoryId': metadata.get('category', '22')  # Default: People & Blogs
+                'categoryId': metadata.get('category', '22'),  # Default: People & Blogs
+                'defaultAudioLanguage': self._get_language_code(metadata.get('video_language', 'English'))
             },
             'status': {
                 'privacyStatus': metadata.get('privacy_status', 'private'),
@@ -176,7 +177,29 @@ class YouTubeClient:
             }
         }
         
+        # Add recording details if recording date is provided
+        if metadata.get('recording_date'):
+            from datetime import datetime
+            recording_date = metadata['recording_date']
+            if isinstance(recording_date, str):
+                recording_date = datetime.fromisoformat(recording_date)
+            body['recordingDetails'] = {
+                'recordingDate': recording_date.isoformat()
+            }
+        
+        # Log altered content and paid promotion info (these cannot be set via API during upload)
+        altered_content = metadata.get('altered_content', 'No')
+        paid_promotion = metadata.get('paid_promotion', False)
+        if altered_content != 'No' or paid_promotion:
+            logger.info(f"Additional metadata - Altered Content: {altered_content}, Paid Promotion: {paid_promotion}")
+            logger.info("Note: These fields need to be set manually in YouTube Studio after upload")
+        
         logger.info(f"Starting upload: {file_info['file_name']}")
+        
+        # Handle thumbnail upload
+        thumbnail_path = metadata.get('thumbnail')
+        if thumbnail_path:
+            logger.info(f"Thumbnail provided: {thumbnail_path}")
         
         try:
             # Create media upload object
@@ -204,6 +227,15 @@ class YouTubeClient:
             video_id = response.get('id', '')
             
             logger.info(f"Upload successful: Video ID = {video_id}")
+            
+            # Upload thumbnail if provided
+            thumbnail_path = metadata.get('thumbnail')
+            if thumbnail_path:
+                try:
+                    self._upload_thumbnail(video_id, thumbnail_path)
+                    logger.info(f"Thumbnail uploaded successfully for video {video_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to upload thumbnail: {str(e)}. Video uploaded without thumbnail.")
             
             return {
                 'success': True,
@@ -295,6 +327,29 @@ class YouTubeClient:
         
         raise NetworkError(f"Upload failed: {str(last_exception)}")
     
+    def _get_language_code(self, language_name: str) -> str:
+        """
+        Convert language name to ISO 639-1 code.
+        
+        Args:
+            language_name: Language name (e.g., "English", "Thai")
+            
+        Returns:
+            ISO 639-1 language code (e.g., "en", "th")
+        """
+        language_map = {
+            'English': 'en',
+            'Thai': 'th',
+            'Spanish': 'es',
+            'French': 'fr',
+            'German': 'de',
+            'Japanese': 'ja',
+            'Korean': 'ko',
+            'Chinese': 'zh',
+            'Other': 'en'
+        }
+        return language_map.get(language_name, 'en')
+    
     def _parse_http_error(self, error: HttpError) -> Dict[str, str]:
         """
         Parse HTTP error to determine error type and message.
@@ -327,6 +382,61 @@ class YouTubeClient:
             pass
         
         return error_details
+    
+    def _upload_thumbnail(self, video_id: str, thumbnail_path: str) -> None:
+        """
+        Upload a custom thumbnail for a video.
+        
+        Args:
+            video_id: YouTube video ID
+            thumbnail_path: Path to thumbnail image file
+            
+        Raises:
+            UploadError: If thumbnail upload fails
+        """
+        try:
+            # Validate thumbnail file
+            path = Path(thumbnail_path)
+            if not path.exists():
+                raise UploadError(f"Thumbnail file not found: {thumbnail_path}")
+            
+            # Check file extension
+            if path.suffix.lower() not in ['.jpg', '.jpeg', '.png', '.webp']:
+                raise UploadError(
+                    f"Unsupported thumbnail format: {path.suffix}. "
+                    f"Supported formats: JPG, JPEG, PNG, WEBP"
+                )
+            
+            # Check file size (YouTube limit: 2MB)
+            file_size = path.stat().st_size
+            if file_size > 2 * 1024 * 1024:  # 2MB
+                raise UploadError(
+                    f"Thumbnail size ({file_size / (1024**2):.2f} MB) exceeds "
+                    f"YouTube's limit of 2 MB"
+                )
+            
+            # Create media upload object for thumbnail
+            media = MediaFileUpload(
+                thumbnail_path,
+                mimetype='image/jpeg',  # YouTube accepts JPEG format
+                resumable=False
+            )
+            
+            # Set thumbnail
+            self.youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=media
+            ).execute()
+            
+            logger.info(f"Thumbnail uploaded successfully for video {video_id}")
+        
+        except HttpError as e:
+            logger.error(f"HTTP error uploading thumbnail: {str(e)}")
+            raise UploadError(f"Failed to upload thumbnail: {str(e)}")
+        
+        except Exception as e:
+            logger.error(f"Error uploading thumbnail: {str(e)}")
+            raise UploadError(f"Failed to upload thumbnail: {str(e)}")
     
     def get_video_categories(self) -> Dict[str, str]:
         """
