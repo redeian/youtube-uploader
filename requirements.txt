@@ -1,0 +1,22 @@
+# YouTube Video Uploader - Python Dependencies
+# This file contains all required Python packages for the application.
+
+# Streamlit - Web application framework
+streamlit>=1.28.0
+
+# Google API Client - YouTube Data API
+google-api-python-client>=2.100.0
+
+# Google Auth - OAuth 2.0 authentication
+google-auth>=2.23.0
+google-auth-oauthlib>=1.0.0
+
+# Cryptography - Token encryption
+cryptography>=41.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Additional dependencies
+urllib3>=2.0.0
+certifi>=2023.7.22
